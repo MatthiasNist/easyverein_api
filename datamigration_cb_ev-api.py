@@ -175,7 +175,7 @@ def create_invoice_id(current_year, current_invoice_nr) -> str:
     :param contact: contact-dict
     :return: invoice_id
     """
-    invoice_id = "-".join([str(current_year), str(current_invoice_nr + 1)])
+    invoice_id = "-".join([str(current_year), "0" + str(current_invoice_nr + 1)])
     return invoice_id
 
 
