@@ -244,7 +244,7 @@ def paymentInformation(methodOfPayment) -> str:
         return "other"
 
 
-def clean_buchungen(df) -> pd.DataFrame:
+def clean_buchungen(df, df_mitgliederliste) -> pd.DataFrame:
     """
     data-cleaning of csv from Courtbooking
     :param df: DataFrame of buchungs-csv from Courtbooking
@@ -255,15 +255,29 @@ def clean_buchungen(df) -> pd.DataFrame:
         doc["Buchungszeit"] = doc["_Datum"].date().strftime(format='%d.%m.%Y') + " " + doc["_Von"].isoformat()
         doc["Spieler_cleaned"] = doc["Spieler"].replace("  ", " ").replace("; ", ";").replace(" ;", ";")
         doc["Zahler"] = doc["Spieler_cleaned"].split(";")[0]
-        match = re.match(r"^(\S+)\s+(.+)$", doc["Zahler"])
-        doc["Vorname"] = match.groups()[0].replace(' ', '')
-        doc["Vorname"] = match.groups()[0].replace('- ', '-')
-        doc["Nachname"] = match.groups()[1].replace(' ', '')
-        doc["Nachname"] = match.groups()[1].replace('- ', '-')
+        match = re.match(r"^(\S+\s+.+)$", doc["Zahler"])
+        doc["Vorname"], doc["Nachname"] = extract_name(full_name=match.groups()[0], df_ref=df_mitgliederliste)
+        doc["Vorname"] = doc["Vorname"] .strip()
+        doc["Nachname"] = doc["Nachname"].strip()
         doc["Nichtzahler"] = doc["Spieler_cleaned"].split(";")[1]
         doc_list.append(doc)
     df_cleaned_buchungen = pd.DataFrame(doc_list)
     return df_cleaned_buchungen
+
+def extract_name(full_name: str, df_ref: pd.DataFrame) -> tuple[str, str]:
+    name = full_name.strip()
+    parts = name.split()
+
+    # Gehe alle möglichen Splits des Namens durch
+    for i in range(1, len(parts)):
+        vorname_candidate = ' '.join(parts[:i])
+        nachname_candidate = ' '.join(parts[i:])
+        # Prüfe, ob diese Kombination im Referenz-DataFrame vorkommt
+        if ((df_ref["Vorname"] == vorname_candidate) & (df_ref["Nachname"] == nachname_candidate)).any():
+            return vorname_candidate, nachname_candidate
+
+    # Fallback: nimm ersten Teil als Vorname, Rest als Nachname
+    return parts[0], ' '.join(parts[1:]) if len(parts) > 1 else ''
 
 
 def get_members_in_ev() -> pd.DataFrame:
@@ -335,6 +349,9 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
     csv_buchungen_alltime = csv_file_path + buchungen_alltime
     csv_mitglieder = csv_file_path + filename_mitglieder
 
+    # DF mit allen Mitgliedern
+    df_mitgliederliste = pd.read_csv(csv_mitglieder, encoding='latin1', sep=';')
+
     # Einlesen der CSV-Datei mit dem angegebenen Encoding
     df_todo_raw = pd.read_csv(csv_buchungen, encoding='latin1', sep=';')
     df_todo = df_todo_raw.copy()
@@ -358,9 +375,8 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
     # Preis-Spalte in Float umwandeln
     df['_Preis'] = df['Preis'].apply(lambda x: float(x.replace(',', '.')))
     df['Anzahl'] = df['Anzahl'].apply(lambda x: int(x))
-    # df_cleaned_buchungen = clean_buchungen(df) # Gaeste
+    # clean_buchungen(df=df, df_mitgliederliste=df_mitgliederliste) # Gaeste
 
-    df_mitgliederliste = pd.read_csv(csv_mitglieder, encoding='latin1', sep=';')
     # df_mitgliederliste['Vorname'] = df_mitgliederliste['Vorname'].str.replace(' ', '') #TODO das macht bei Doppelvornamen Probleme!
     # df_mitgliederliste['Nachname'] = df_mitgliederliste['Nachname'].str.replace(' ', '') #TODO das macht bei Doppelnachnamen Probleme!
     # df_mitgliederliste['Anrede'] = df_mitgliederliste.apply(lambda x: 'Herr' if )
