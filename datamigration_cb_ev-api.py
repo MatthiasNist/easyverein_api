@@ -52,7 +52,7 @@ def create_guestplayer(contact,
                                   zip=contact["plz"],
                                   mobilePhone=contact["Handynummer"],
                                   privatePhone=contact["Telefonnummer"],
-                                  methodOfPayment=methodOfPayment(zahlungsart=contact["Zahlungsart"]),
+                                  methodOfPayment=methodOfPayment(contact=contact),
                                   iban=contact["IBAN"],
                                   bic=contact["BIC"],
                                   sepaMandate=contact["Mandatsreferenz"],
@@ -86,7 +86,7 @@ def create_invoice(contact, completion_date, dryrun=False, account='Hauptkonto')
         invoice.selectionAcc = 187408412
     invoice.relatedAddress = 'https://easyverein.com/api/v1.7/contact-details/' + str(contact["contact_obj"].id)
 
-    items = create_invoice_items(contact=contact, art='Getränk', completion_date=completion_date)
+    items = create_invoice_items(contact=contact, art='Artikel', completion_date=completion_date)
 
     if not dryrun:
         output = ev_client.invoice.create_with_items(invoice, items=items)
@@ -114,20 +114,20 @@ def create_invoice_items(contact, art, completion_date):
             invoice_item.billingAccount = 'https://easyverein.com/api/v2.0/billing-account/44093'
             items.append(invoice_item)
 
-    elif art == 'Getränk':
+    elif art == 'Artikel':
         data = {
             'Vorname': contact["Vorname"],
             'Nachname': contact["Nachname"],
             '_Preis': contact["_Preis"],
             'Kaufdatum': contact["_Kaufdatum"],
             'Anzahl': contact["Anzahl"],
-            'Getränk': [list(set(i)) for i in contact['Getränk']] # damit im Posten das Getränk nur einmal steht
+            'Artikel': [list(set(i)) for i in contact['Artikel']]  # damit im Posten das Getränk nur einmal steht
         }
         for i in range(len(data['_Preis'])):
             buchungstext = "Getränkebuchung am %(date)s, Anzahl Getränke: %(Anzahl)s aus Listenposten: %(Posten)s" % {
                 "date": data['Kaufdatum'][i].strftime(format='%d.%m.%Y'),
                 "Anzahl": sum(data['Anzahl'][i]),
-                "Posten": ', '.join(data['Getränk'][i])}
+                "Posten": ', '.join(data['Artikel'][i])}
             invoice_item = InvoiceItem(title=buchungstext, quantity=1, unitPrice=sum(data['_Preis'][i]),
                                        description=get_description(kaufdatum=contact["_Kaufdatum"][i],
                                                                    completion_date=completion_date),
@@ -194,7 +194,7 @@ def create_receiver_string(contact_obj) -> str:
         "city": contact_obj.city}
 
 
-def methodOfPayment(zahlungsart) -> int:
+def methodOfPayment(contact) -> int:
     """
     methodOfPayment:
     Defines the method of payment preferred by the user. Converts it from Courtbooking entry (Rechnung / Lastschrift)
@@ -210,8 +210,11 @@ def methodOfPayment(zahlungsart) -> int:
     :param contact:
     :return:
     """
-
-    return 2  # TODO provisorisch immer "Rechnung" für Gastspieler, später siehe auskommentierter Titel unten
+    if contact.get("Mitgliedsart", False):
+        if contact["Mitgliedsart"] == "Zahler":
+            return 1
+    else:
+        return 2  # TODO provisorisch immer "Rechnung" für Gastspieler, später siehe auskommentierter Titel unten
 
     # if zahlungsart == "Lastschrift":
     #     return 1
@@ -257,12 +260,13 @@ def clean_buchungen(df, df_mitgliederliste) -> pd.DataFrame:
         doc["Zahler"] = doc["Spieler_cleaned"].split(";")[0]
         match = re.match(r"^(\S+\s+.+)$", doc["Zahler"])
         doc["Vorname"], doc["Nachname"] = extract_name(full_name=match.groups()[0], df_ref=df_mitgliederliste)
-        doc["Vorname"] = doc["Vorname"] .strip()
+        doc["Vorname"] = doc["Vorname"].strip()
         doc["Nachname"] = doc["Nachname"].strip()
         doc["Nichtzahler"] = doc["Spieler_cleaned"].split(";")[1]
         doc_list.append(doc)
     df_cleaned_buchungen = pd.DataFrame(doc_list)
     return df_cleaned_buchungen
+
 
 def extract_name(full_name: str, df_ref: pd.DataFrame) -> tuple[str, str]:
     name = full_name.strip()
@@ -353,7 +357,8 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
     df_mitgliederliste = pd.read_csv(csv_mitglieder, encoding='latin1', sep=';')
 
     # Einlesen der CSV-Datei mit dem angegebenen Encoding
-    df_todo_raw = pd.read_csv(csv_buchungen, encoding='latin1', sep=';')
+    df_todo_raw = pd.read_csv(csv_buchungen, encoding='latin1', sep=';')[
+        ['Vorname', 'Nachname', 'Artikel', 'Anzahl', 'Kaufdatum', 'Preis', 'Gezahlt']]
     df_todo = df_todo_raw.copy()
     df_todo['_Kaufdatum'] = pd.to_datetime(df_todo['Kaufdatum'], format='%d.%m.%Y %H:%M').dt.date
 
@@ -365,7 +370,6 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
     # das raw CB csv wie es eingelesen wird, wird hier Doppelgecheckt nach bereits abgerechneten Buchungen, diese werden entfernt.
     # Später wird das "alltime"-CSV bereits abgerechneter Buchung direkt nach jeder Rechnungserstellung um die neu abgerehcneten Einträge im Raw Format ergänzt und abgespeichert
     df = doublecheck_billing(df_not_paid=df_not_paid, df_alltime=df_alltime)
-    # TODO Am besten hierfür wohl nur auf Vorname, Name, Kaufdatum checken, da sonst zu kompliziert/ granular
 
     # Umwandeln der Datums- und Zeitspalten
     # df['_Kaufdatum'] = pd.to_datetime(df['Kaufdatum'], format='%d.%m.%Y %H:%M') # Gaeste
@@ -375,24 +379,23 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
     # Preis-Spalte in Float umwandeln
     df['_Preis'] = df['Preis'].apply(lambda x: float(x.replace(',', '.')))
     df['Anzahl'] = df['Anzahl'].apply(lambda x: int(x))
-    # clean_buchungen(df=df, df_mitgliederliste=df_mitgliederliste) # Gaeste
+    # clean_buchungen(df=df, df_mitgliederliste=df_mitgliederliste) # TODO Gaeste
 
-    # df_mitgliederliste['Vorname'] = df_mitgliederliste['Vorname'].str.replace(' ', '') #TODO das macht bei Doppelvornamen Probleme!
-    # df_mitgliederliste['Nachname'] = df_mitgliederliste['Nachname'].str.replace(' ', '') #TODO das macht bei Doppelnachnamen Probleme!
-    # df_mitgliederliste['Anrede'] = df_mitgliederliste.apply(lambda x: 'Herr' if )
+    df_mitgliederliste['Vorname'] = df_mitgliederliste['Vorname'].str.strip()
+    df_mitgliederliste['Nachname'] = df_mitgliederliste['Nachname'].str.strip()
 
     df.sort_values("_Kaufdatum", ascending=True,
                    inplace=True)  # damit erste Buchung in der folgenden Liste vorne steht
 
     df_grouped_all = df.groupby(['Vorname', 'Nachname', '_Kaufdatum']).agg({
-        'Getränk': list,
+        'Artikel': list,
         'Anzahl': list,
         '_Preis': list
     }).reset_index()
 
     df_grouped_all_person = df_grouped_all.groupby(['Vorname', 'Nachname']).agg({
         '_Kaufdatum': list,
-        'Getränk': list,
+        'Artikel': list,
         'Anzahl': list,
         '_Preis': list
     }).reset_index()
@@ -411,8 +414,13 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
     merged_all_players_df = pd.merge(merged_df, df_all_members, on=['Vorname', 'Nachname', 'plz'], how='left')
 
     for contact in merged_all_players_df.to_dict(orient='records'):
-        # if not ((contact["Nachname"] == "Dohn" and contact["Vorname"] == "Lukas")):  # TODO ZU DEBUGGING ZWECKEN
+        # if not ((contact["Nachname"] == "Abendroth" and contact["Vorname"] == "Franziska")):  # TODO ZU DEBUGGING ZWECKEN
         #     continue
+        # if contact.get('Gruppe', False):
+        #     if isinstance(contact['Gruppe'], str):
+        #         continue
+        #     elif np.isnan(contact['Gruppe']):
+        #         print("FEHLER")
         # if not ((contact["Nachname"] == "Fischer" and contact["Vorname"] == "Charlotte") or (
         #         contact["Nachname"] == "Lechner" and contact[
         #     "Vorname"] == "Christian")):  # TODO zum Testen für Dryrun = False
@@ -431,7 +439,7 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
                     print("SAVED BILLINGS FOR PLAYER %(first_name)s %(family_name)s TO ALLTIME TABLE!" % {
                         "first_name": contact["Vorname"],
                         "family_name": contact["Nachname"]})
-                    time.sleep(10) # sonst too many requests error
+                    time.sleep(10)  # sonst too many requests error
             except KeyError as e:
                 print(
                     "ERROR WHILE CREATING INVOICE FOR PLAYER %(first_name)s %(family_name)s: %(error)s - Missing information in easyVerein!" % {
@@ -444,54 +452,58 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
                                                                                "error": e})
             except EasyvereinAPIException as e:
                 print(
-                    "ERROR WHILE CREATING INVOICE FOR GUESTPLAYER %(first_name)s %(family_name)s: %(error)s - Invoice ID already existing!" % {
+                    "ERROR WHILE CREATING INVOICE FOR GUESTPLAYER %(first_name)s %(family_name)s: %(error)s" % {
                         "first_name": contact["Vorname"],
                         "family_name": contact["Nachname"],
                         "error": str(e)})
 
-        # if pd.isna(contact["Gruppe"]):
-        #     raise NotImplementedError
-        #     try:
-        #         contact = create_guestplayer(contact=contact,
-        #                                      dryrun=dryrun)  # Gastspieler anlegen und Rechnung erstellen
-        #         if not dryrun:
-        #             print("created guestplayer %(first_name)s %(family_name)s in easyVerein!" % {
-        #                 "first_name": contact["Vorname"],
-        #                 "family_name": contact["Nachname"]})
-        #     except Exception as e:
-        #         print("ERROR WHILE CREATING GUESTPLAYER %(first_name)s %(family_name)s: %(error)s" % {
-        #             "first_name": contact["Vorname"],
-        #             "family_name": contact["Nachname"],
-        #             "error": str(e)})
-        #     try:
-        #         if not dryrun:
-        #             output_invoice = create_invoice(contact=contact, dryrun=dryrun)
-        #             print("created invoice in easyVerein: %(invoice)s" % {"invoice": output_invoice})
-        #             save_billing_to_alltime(firstName=contact["Vorname"], lastName=contact["Nachname"],
-        #                                     # CB raw csv wird ergänzt
-        #                                     df_cleaned_buchungen=df_todo_raw,
-        #                                     csv_buchungen_alltime=df_alltime)
-        #             print("SAVED BILLINGS FOR PLAYER %(first_name)s %(family_name)s TO ALLTIME TABLE!" % {
-        #                 "first_name": contact["Vorname"],
-        #                 "family_name": contact["Nachname"]})
-        #     except KeyError as e:
-        #         print(
-        #             "ERROR WHILE CREATING INVOICE FOR GUESTPLAYER %(first_name)s %(family_name)s: %(error)s - Missing information in easyVerein!" % {
-        #                 "first_name": contact["Vorname"],
-        #                 "family_name": contact["Nachname"],
-        #                 "error": str(e)})
-        #     except EasyvereinAPIException as e:
-        #         print(
-        #             "ERROR WHILE CREATING INVOICE FOR GUESTPLAYER %(first_name)s %(family_name)s: %(error)s" % {
-        #                 "first_name": contact["Vorname"],
-        #                 "family_name": contact["Nachname"],
-        #                 "error": str(e)})
+        if pd.isna(contact["Gruppe"]):
+            try:
+                contact = create_guestplayer(contact=contact,
+                                             dryrun=dryrun)  # Gastspieler anlegen und Rechnung erstellen
+                if not dryrun:
+                    print("created guestplayer %(first_name)s %(family_name)s in easyVerein!" % {
+                        "first_name": contact["Vorname"],
+                        "family_name": contact["Nachname"]})
+            except Exception as e:
+                print("ERROR WHILE CREATING GUESTPLAYER %(first_name)s %(family_name)s: %(error)s" % {
+                    "first_name": contact["Vorname"],
+                    "family_name": contact["Nachname"],
+                    "error": str(e)})
+            try:
+                if not dryrun:
+                    output_invoice = create_invoice(contact=contact,
+                                            dryrun=dryrun,
+                                            completion_date=completion_date)
+                    print("created invoice in easyVerein: %(invoice)s" % {"invoice": output_invoice})
+                    save_billing_to_alltime(firstName=contact["Vorname"], lastName=contact["Nachname"],
+                                            # CB raw csv wird ergänzt
+                                            df_cleaned_buchungen=df_todo_raw,
+                                            csv_buchungen_alltime=csv_buchungen_alltime)
+                    print("SAVED BILLINGS FOR PLAYER %(first_name)s %(family_name)s TO ALLTIME TABLE!" % {
+                        "first_name": contact["Vorname"],
+                        "family_name": contact["Nachname"]})
+                    time.sleep(10)  # sonst too many requests error
+            except KeyError as e:
+                print(
+                    "ERROR WHILE CREATING INVOICE FOR GUESTPLAYER %(first_name)s %(family_name)s: %(error)s - Missing information in easyVerein!" % {
+                        "first_name": contact["Vorname"],
+                        "family_name": contact["Nachname"],
+                        "error": str(e)})
+            except EasyvereinAPIException as e:
+                print(
+                    "ERROR WHILE CREATING INVOICE FOR GUESTPLAYER %(first_name)s %(family_name)s: %(error)s" % {
+                        "first_name": contact["Vorname"],
+                        "family_name": contact["Nachname"],
+                        "error": str(e)})
 
 
 if __name__ == '__main__':
-    main(csv_file_path='C:/Users/Megaport/Desktop/TCGrafrath/03_Datenstatus_CBvsEasyVerein/Getränke/',
-         filename_buchungen='getraenkeliste.csv',
-         filename_mitglieder='20240914_mitgliederliste.csv',
-         buchungen_alltime='Gesamtübersicht_getraenke.csv',
-         dryrun=False,
-         completion_date=dt.date(2024, 12, 6)) #TODO completion_date nur für Getränkeabrechnung relevant (Hinweis bei Vereinsgetränkeliste) muss Lösung gefunden werden beim zusammenführen mit Gästebuchungen
+    main(
+        csv_file_path='C:/Users/Megaport/Desktop/TCGrafrath/03_Datenstatus_CBvsEasyVerein/Getränkeabrechnung_August2025/',
+        filename_buchungen='getraenkeliste.csv',
+        filename_mitglieder='mitgliederliste.csv',
+        buchungen_alltime='Gesamtübersicht_getraenke.csv',
+        dryrun=False,
+        completion_date=dt.date(2025, 8,
+                                10))  # TODO completion_date nur für Getränkeabrechnung relevant (Hinweis bei Vereinsgetränkeliste) muss Lösung gefunden werden beim zusammenführen mit Gästebuchungen
