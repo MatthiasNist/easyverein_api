@@ -13,7 +13,7 @@ import datetime as dt
 from easyverein.core.exceptions import EasyvereinAPIException
 
 # HIER API-KEY EINTRAGEN
-api_key = '6eac274c55910c100948da6c7ad83c5efa08c8ce'
+api_key = ''
 
 ev_client = EasyvereinAPI(
     api_key,
