@@ -1,5 +1,6 @@
 import re
 import time
+import os
 
 import pandas as pd
 import numpy as np
@@ -69,14 +70,14 @@ def create_guestplayer(contact,
     return contact
 
 
-def create_invoice(contact, completion_date, dryrun=False, account='Hauptkonto'):
+def create_invoice(contact, completion_date, process_type, dryrun=False, account='Hauptkonto'):
     current_year = dt.datetime.now().year
     current_invoice_nr = get_current_invoice_nr(current_year=current_year)
 
     invoice = InvoiceCreate(
         invNumber=create_invoice_id(current_year=current_year, current_invoice_nr=current_invoice_nr),
         # invNumber zB 2024-631
-        totalPrice=calculate_preis(preisliste=contact["_Preis"], art='Getränk'),
+        totalPrice=calculate_preis(preisliste=contact["_Preis"], process_type=process_type),
         relatedAddress=contact["contact_obj"],
         paymentInformation=paymentInformation(contact["contact_obj"].methodOfPayment))
     invoice.kind = "revenue"  # Einnahme des Vereins
@@ -86,7 +87,7 @@ def create_invoice(contact, completion_date, dryrun=False, account='Hauptkonto')
         invoice.selectionAcc = 187408412
     invoice.relatedAddress = 'https://easyverein.com/api/v1.7/contact-details/' + str(contact["contact_obj"].id)
 
-    items = create_invoice_items(contact=contact, art='Artikel', completion_date=completion_date)
+    items = create_invoice_items(contact=contact, process_type=process_type, completion_date=completion_date)
 
     if not dryrun:
         output = ev_client.invoice.create_with_items(invoice, items=items)
@@ -95,9 +96,9 @@ def create_invoice(contact, completion_date, dryrun=False, account='Hauptkonto')
     return output
 
 
-def create_invoice_items(contact, art, completion_date):
+def create_invoice_items(contact, process_type, completion_date):
     items = []
-    if art == 'Gast':
+    if process_type == 'gaesteliste':
         data = {
             'Vorname': contact["Vorname"],
             'Nachname': contact["Nachname"],
@@ -114,22 +115,22 @@ def create_invoice_items(contact, art, completion_date):
             invoice_item.billingAccount = 'https://easyverein.com/api/v2.0/billing-account/44093'
             items.append(invoice_item)
 
-    elif art == 'Artikel':
+    elif process_type == 'getraenkeliste':
         data = {
             'Vorname': contact["Vorname"],
             'Nachname': contact["Nachname"],
             '_Preis': contact["_Preis"],
-            'Kaufdatum': contact["_Kaufdatum"],
+            'Datum': contact["Datum"],
             'Anzahl': contact["Anzahl"],
             'Artikel': [list(set(i)) for i in contact['Artikel']]  # damit im Posten das Getränk nur einmal steht
         }
         for i in range(len(data['_Preis'])):
             buchungstext = "Getränkebuchung am %(date)s, Anzahl Getränke: %(Anzahl)s aus Listenposten: %(Posten)s" % {
-                "date": data['Kaufdatum'][i].strftime(format='%d.%m.%Y'),
+                "date": data['Datum'][i].strftime(format='%d.%m.%Y'),
                 "Anzahl": sum(data['Anzahl'][i]),
                 "Posten": ', '.join(data['Artikel'][i])}
             invoice_item = InvoiceItem(title=buchungstext, quantity=1, unitPrice=sum(data['_Preis'][i]),
-                                       description=get_description(kaufdatum=contact["_Kaufdatum"][i],
+                                       description=get_description(kaufdatum=contact["Datum"][i],
                                                                    completion_date=completion_date),
                                        taxRate=0.00, taxName=' ')
             invoice_item.billingAccount = 'https://easyverein.com/api/v2.0/billing-account/44134'
@@ -144,10 +145,10 @@ def get_description(kaufdatum, completion_date):
         return 'Preise siehe Preisliste Courtbooking'
 
 
-def calculate_preis(preisliste, art):
-    if art == 'Gast':
+def calculate_preis(preisliste, process_type):
+    if process_type == 'gaesteliste':
         return sum(preisliste)
-    elif art == "Getränk":
+    elif process_type == "getraenkeliste":
         return sum([sum(i) for i in preisliste])
 
 
@@ -256,7 +257,7 @@ def clean_buchungen(df, df_mitgliederliste) -> pd.DataFrame:
     doc_list = []
     for doc in df.to_dict(orient='records'):
         doc["Buchungszeit"] = doc["_Datum"].date().strftime(format='%d.%m.%Y') + " " + doc["_Von"].isoformat()
-        doc["Spieler_cleaned"] = doc["Spieler"].replace("  ", " ").replace("; ", ";").replace(" ;", ";")
+        doc["Spieler_cleaned"] = doc["Nutzer"].replace("  ", " ").replace("; ", ";").replace(" ;", ";")
         doc["Zahler"] = doc["Spieler_cleaned"].split(";")[0]
         match = re.match(r"^(\S+\s+.+)$", doc["Zahler"])
         doc["Vorname"], doc["Nachname"] = extract_name(full_name=match.groups()[0], df_ref=df_mitgliederliste)
@@ -340,7 +341,7 @@ def save_billing_to_alltime(firstName, lastName, df_cleaned_buchungen, csv_buchu
     df_combined.to_csv(csv_buchungen_alltime, sep=";", encoding='latin1', index=False)
 
 
-def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_alltime, completion_date, dryrun=False):
+def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_alltime, completion_date=None, dryrun=False):
     """
     main-function of script
     :param csv_file_path: Path to the downloaded csvs from Courtbooking
@@ -356,20 +357,43 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
     # DF mit allen Mitgliedern
     df_mitgliederliste = pd.read_csv(csv_mitglieder, encoding='latin1', sep=';')
 
+    process_type = os.path.splitext(os.path.basename(csv_buchungen))[0]
+
+    if process_type == 'gaesteliste':
+        column_list = ['Nutzer', 'Platz', 'Datum', 'Von', 'Bis', 'Dauer', 'Preis', 'Gezahlt', 'Zahlungsart']
+    elif process_type == 'getraenkeliste':
+        column_list = ['Vorname', 'Nachname', 'Artikel', 'Anzahl', 'Kaufdatum', 'Preis', 'Gezahlt']
+    else:
+        raise NotImplementedError
+
     # Einlesen der CSV-Datei mit dem angegebenen Encoding
     df_todo_raw = pd.read_csv(csv_buchungen, encoding='latin1', sep=';')[
-        ['Vorname', 'Nachname', 'Artikel', 'Anzahl', 'Kaufdatum', 'Preis', 'Gezahlt']]
+        column_list]
     df_todo = df_todo_raw.copy()
-    df_todo['_Kaufdatum'] = pd.to_datetime(df_todo['Kaufdatum'], format='%d.%m.%Y %H:%M').dt.date
 
     df_alltime = pd.read_csv(csv_buchungen_alltime, encoding='latin1',
                              sep=';')  # CSV aller in der Vergangenehit abgerechneten Buchungen
-    df_alltime['_Kaufdatum'] = pd.to_datetime(df_alltime['Kaufdatum'], format='%d.%m.%Y %H:%M').dt.date
+
     df_not_paid = df_todo.loc[df_todo["Gezahlt"] == 'Nicht gezahlt']
 
     # das raw CB csv wie es eingelesen wird, wird hier Doppelgecheckt nach bereits abgerechneten Buchungen, diese werden entfernt.
     # Später wird das "alltime"-CSV bereits abgerechneter Buchung direkt nach jeder Rechnungserstellung um die neu abgerehcneten Einträge im Raw Format ergänzt und abgespeichert
     df = doublecheck_billing(df_not_paid=df_not_paid, df_alltime=df_alltime)
+    if df.shape[0] == 0:
+        print("KEINE NEUEN BUCHUNGSDATEN ZUM ABRECHNEN!")
+        return
+
+    if process_type == 'gaesteliste':
+        df['_Datum'] = pd.to_datetime(df['Datum'], format='%d.%m.%Y')
+        df['_Von'] = pd.to_datetime(df['Von'], format='%H:%M Uhr').dt.time
+        df['_Bis'] = pd.to_datetime(df['Bis'], format='%H:%M Uhr').dt.time
+        df_alltime['Datum'] = pd.to_datetime(df_alltime['Datum'], format='%d.%m.%Y')
+
+    elif process_type == 'getraenkeliste':
+        df['Datum'] = pd.to_datetime(df['Kaufdatum'], format='%d.%m.%Y %H:%M').dt.date
+        df_alltime['Datum'] = pd.to_datetime(df_alltime['Kaufdatum'], format='%d.%m.%Y %H:%M').dt.date
+    else:
+        raise NotImplementedError
 
     # Umwandeln der Datums- und Zeitspalten
     # df['_Kaufdatum'] = pd.to_datetime(df['Kaufdatum'], format='%d.%m.%Y %H:%M') # Gaeste
@@ -378,31 +402,47 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
 
     # Preis-Spalte in Float umwandeln
     df['_Preis'] = df['Preis'].apply(lambda x: float(x.replace(',', '.')))
-    df['Anzahl'] = df['Anzahl'].apply(lambda x: int(x))
+
+    if process_type == 'getraenkeliste':
+        df['Anzahl'] = df['Anzahl'].apply(lambda x: int(x))
     # clean_buchungen(df=df, df_mitgliederliste=df_mitgliederliste) # TODO Gaeste
+    if process_type == 'gaesteliste':
+        df = clean_buchungen(df=df, df_mitgliederliste=df_mitgliederliste)
 
     df_mitgliederliste['Vorname'] = df_mitgliederliste['Vorname'].str.strip()
     df_mitgliederliste['Nachname'] = df_mitgliederliste['Nachname'].str.strip()
 
-    df.sort_values("_Kaufdatum", ascending=True,
+    df.sort_values("Datum", ascending=True,
                    inplace=True)  # damit erste Buchung in der folgenden Liste vorne steht
 
-    df_grouped_all = df.groupby(['Vorname', 'Nachname', '_Kaufdatum']).agg({
-        'Artikel': list,
-        'Anzahl': list,
-        '_Preis': list
-    }).reset_index()
+    if process_type == 'gaesteliste':
+        df_grouped_all = df.groupby(['Vorname', 'Nachname']).agg({
+            'Zahlungsart': 'first',
+            '_Preis': 'sum',
+            'Buchungszeit': list,
+            'Dauer': list,
+            '_Preis': list
+        }).reset_index()
 
-    df_grouped_all_person = df_grouped_all.groupby(['Vorname', 'Nachname']).agg({
-        '_Kaufdatum': list,
-        'Artikel': list,
-        'Anzahl': list,
-        '_Preis': list
-    }).reset_index()
+    elif process_type == 'getraenkeliste':
+        df_grouped = df.groupby(['Vorname', 'Nachname', 'Datum']).agg({
+            'Artikel': list,
+            'Anzahl': list,
+            '_Preis': list
+        }).reset_index()
+
+        df_grouped_all = df_grouped.groupby(['Vorname', 'Nachname']).agg({
+            'Datum': list,
+            'Artikel': list,
+            'Anzahl': list,
+            '_Preis': list
+        }).reset_index()
+    else:
+        raise NotImplementedError
 
     # TODO hier weiter, Datenstruktur ist: Kaufdatum: Liste, Getrönk, Anzahl, Preis: Liste aus Listen, Zeilen werden durch VOrname, Nachname bestimmt
 
-    merged_df = pd.merge(df_grouped_all_person, df_mitgliederliste, on=['Vorname', 'Nachname'], how='left')
+    merged_df = pd.merge(df_grouped_all, df_mitgliederliste, on=['Vorname', 'Nachname'], how='left')
     merged_df['Anrede'] = merged_df['Geschlecht'].apply(lambda x: 'Herr' if x == 'Männlich' else 'Frau')
     merged_df['plz'] = merged_df['PLZ'].apply(lambda x: str(x) if np.isnan(x) else str(int(x)))
     merged_df['Telefonnummer'] = merged_df['Telefonnummer'].apply(
@@ -429,6 +469,7 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
             try:
                 output = create_invoice(contact=contact,
                                         dryrun=dryrun,
+                                        process_type=process_type,
                                         completion_date=completion_date)  # Mitglied oder Gastpieler ist in easyVerein => Erstelung der Rechnung
                 if not dryrun:
                     print("created invoice in easyVerein: %(invoice)s" % {"invoice": output})
@@ -473,8 +514,8 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
             try:
                 if not dryrun:
                     output_invoice = create_invoice(contact=contact,
-                                            dryrun=dryrun,
-                                            completion_date=completion_date)
+                                                    dryrun=dryrun,
+                                                    completion_date=completion_date)
                     print("created invoice in easyVerein: %(invoice)s" % {"invoice": output_invoice})
                     save_billing_to_alltime(firstName=contact["Vorname"], lastName=contact["Nachname"],
                                             # CB raw csv wird ergänzt
@@ -500,10 +541,15 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
 
 if __name__ == '__main__':
     main(
-        csv_file_path='C:/Users/Megaport/Desktop/TCGrafrath/03_Datenstatus_CBvsEasyVerein/Getränkeabrechnung_August2025/',
+        csv_file_path='C:/Users/Megaport/Desktop/TCGrafrath/03_Datenstatus_CBvsEasyVerein/Getränkeabrechnung_November2025/',
         filename_buchungen='getraenkeliste.csv',
         filename_mitglieder='mitgliederliste.csv',
         buchungen_alltime='Gesamtübersicht_getraenke.csv',
-        dryrun=False,
-        completion_date=dt.date(2025, 8,
-                                10))  # TODO completion_date nur für Getränkeabrechnung relevant (Hinweis bei Vereinsgetränkeliste) muss Lösung gefunden werden beim zusammenführen mit Gästebuchungen
+        dryrun=True,
+        completion_date=dt.date(2025, 11, 28))  # TODO completion_date nur für Getränkeabrechnung relevant (Hinweis bei Vereinsgetränkeliste) muss Lösung gefunden werden beim zusammenführen mit Gästebuchungen
+    # main(
+    #     csv_file_path='C:/Users/Megaport/Desktop/TCGrafrath/03_Datenstatus_CBvsEasyVerein/Gaesteabrechnung_November2025/',
+    #     filename_buchungen='gaesteliste.csv',
+    #     filename_mitglieder='mitgliederliste.csv',
+    #     buchungen_alltime='Gesamtübersicht_abgerechnet.csv',
+    #     dryrun=True)
