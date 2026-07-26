@@ -22,12 +22,7 @@ ev_client = EasyvereinAPI(
     logger=None,
 )
 
-# TODO bis 14.09 müssten die Gastspieler Daten in CB jetzt soweit passen
-# TODO: Wenn Gast (bzw. nicht Mitglied) immer Rechnung
-# TODO Erstellung Gastspieler mit IBAN Feldern (sepaMandate = Mandatsreferenz "EV...")?
-
 dryrun = True
-
 
 def create_guestplayer(contact,
                        contactDetailsGroup_Guest=['https://easyverein.com/api/v1.7/contact-details-group/187854580'],
@@ -45,8 +40,8 @@ def create_guestplayer(contact,
     contact = {k: ("" if v is np.nan and k in keys_to_check else v) for k, v in contact.items()}
 
     guest_player = ContactDetails(firstName=contact["Vorname"], familyName=contact["Nachname"], isCompany=False,
-                                  primaryEmail=contact['E-Mail'],
-                                  privateEmail=contact['E-Mail'],
+                                  primaryEmail=contact['E-Mail Adresse'],
+                                  privateEmail=contact['E-Mail Adresse'],
                                   salutation=contact['Anrede'],
                                   street=contact["Straße"],
                                   city=contact["Ort"],
@@ -333,11 +328,20 @@ def doublecheck_billing(df_not_paid, df_alltime):
     return df_still_to_pay
 
 
-def save_billing_to_alltime(firstName, lastName, df_cleaned_buchungen, csv_buchungen_alltime):
-    df_current_getränke = df_cleaned_buchungen[
+def save_billing_to_alltime_guests(firstName, lastName, df_cleaned_buchungen, csv_buchungen_alltime):
+    df_current_guest = df_cleaned_buchungen[
+        (df_cleaned_buchungen["Vorname"] == firstName) & (df_cleaned_buchungen["Nachname"] == lastName)][
+        ["Nutzer", "Platz", "Datum", "Von", "Bis", "Dauer", "Preis", "Gezahlt", "Zahlungsart"]]
+    df_alltime_current = pd.read_csv(csv_buchungen_alltime, encoding='latin1', sep=';')
+    df_combined = pd.concat([df_alltime_current, df_current_guest], ignore_index=False)
+    df_combined.to_csv(csv_buchungen_alltime, sep=";", encoding='latin1', index=False)
+
+
+def save_billing_to_alltime_shop(firstName, lastName, df_cleaned_buchungen, csv_buchungen_alltime):
+    df_current_getraenke = df_cleaned_buchungen[
         (df_cleaned_buchungen["Vorname"] == firstName) & (df_cleaned_buchungen["Nachname"] == lastName)]
     df_alltime_current = pd.read_csv(csv_buchungen_alltime, encoding='latin1', sep=';')
-    df_combined = pd.concat([df_alltime_current, df_current_getränke], ignore_index=False)
+    df_combined = pd.concat([df_alltime_current, df_current_getraenke], ignore_index=False)
     df_combined.to_csv(csv_buchungen_alltime, sep=";", encoding='latin1', index=False)
 
 
@@ -440,11 +444,9 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
     else:
         raise NotImplementedError
 
-    # TODO hier weiter, Datenstruktur ist: Kaufdatum: Liste, Getrönk, Anzahl, Preis: Liste aus Listen, Zeilen werden durch VOrname, Nachname bestimmt
-
     merged_df = pd.merge(df_grouped_all, df_mitgliederliste, on=['Vorname', 'Nachname'], how='left')
     merged_df['Anrede'] = merged_df['Geschlecht'].apply(lambda x: 'Herr' if x == 'Männlich' else 'Frau')
-    merged_df['plz'] = merged_df['PLZ'].apply(lambda x: str(x) if np.isnan(x) else str(int(x)))
+    merged_df['plz'] = merged_df['Postleitzahl'].apply(lambda x: str(x) if np.isnan(x) else str(int(x)))
     merged_df['Telefonnummer'] = merged_df['Telefonnummer'].apply(
         lambda x: str(x).replace(" ", "").replace("/", "") if type(x) == str else None)
     merged_df['Handynummer'] = merged_df['Handynummer'].apply(
@@ -454,8 +456,8 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
     merged_all_players_df = pd.merge(merged_df, df_all_members, on=['Vorname', 'Nachname', 'plz'], how='left')
 
     for contact in merged_all_players_df.to_dict(orient='records'):
-        # if not ((contact["Nachname"] == "Abendroth" and contact["Vorname"] == "Franziska")):  # TODO ZU DEBUGGING ZWECKEN
-        #     continue
+        if not ((contact["Nachname"] == "Lechner" and contact["Vorname"] == "Christian")):  # TODO ZU DEBUGGING ZWECKEN
+            continue
         # if contact.get('Gruppe', False):
         #     if isinstance(contact['Gruppe'], str):
         #         continue
@@ -463,20 +465,27 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
         #         print("FEHLER")
         # if not ((contact["Nachname"] == "Fischer" and contact["Vorname"] == "Charlotte") or (
         #         contact["Nachname"] == "Lechner" and contact[
-        #     "Vorname"] == "Christian")):  # TODO zum Testen für Dryrun = False
+        #     "Vorname"] == "Christian")):
         #     continue
         if contact["Gruppe"] == "Mitglied" or contact["Gruppe"] == "Gast":
             try:
-                output = create_invoice(contact=contact,
-                                        dryrun=dryrun,
-                                        process_type=process_type,
-                                        completion_date=completion_date)  # Mitglied oder Gastpieler ist in easyVerein => Erstelung der Rechnung
+                output = "test"
+                # output = create_invoice(contact=contact,
+                #                         dryrun=dryrun,
+                #                         process_type=process_type,
+                #                         completion_date=completion_date)  # Mitglied oder Gastpieler ist in easyVerein => Erstelung der Rechnung
                 if not dryrun:
                     print("created invoice in easyVerein: %(invoice)s" % {"invoice": output})
-                    save_billing_to_alltime(firstName=contact["Vorname"], lastName=contact["Nachname"],
-                                            # CB raw csv wird ergänzt
-                                            df_cleaned_buchungen=df_todo_raw,
-                                            csv_buchungen_alltime=csv_buchungen_alltime)
+                    if process_type == 'gaesteliste':
+                        save_billing_to_alltime_guests(firstName=contact["Vorname"], lastName=contact["Nachname"],
+                                                       # CB raw csv wird ergänzt
+                                                       df_cleaned_buchungen=df,
+                                                       csv_buchungen_alltime=csv_buchungen_alltime)
+                    if process_type == 'getraenkeliste':
+                        save_billing_to_alltime_shop(firstName=contact["Vorname"], lastName=contact["Nachname"],
+                                                     # CB raw csv wird ergänzt
+                                                     df_cleaned_buchungen=df,
+                                                     csv_buchungen_alltime=csv_buchungen_alltime)
                     print("SAVED BILLINGS FOR PLAYER %(first_name)s %(family_name)s TO ALLTIME TABLE!" % {
                         "first_name": contact["Vorname"],
                         "family_name": contact["Nachname"]})
@@ -517,10 +526,16 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
                                                     dryrun=dryrun,
                                                     completion_date=completion_date)
                     print("created invoice in easyVerein: %(invoice)s" % {"invoice": output_invoice})
-                    save_billing_to_alltime(firstName=contact["Vorname"], lastName=contact["Nachname"],
-                                            # CB raw csv wird ergänzt
-                                            df_cleaned_buchungen=df_todo_raw,
-                                            csv_buchungen_alltime=csv_buchungen_alltime)
+                    if process_type == 'gaesteliste':
+                        save_billing_to_alltime_guests(firstName=contact["Vorname"], lastName=contact["Nachname"],
+                                                       # CB raw csv wird ergänzt
+                                                       df_cleaned_buchungen=df,
+                                                       csv_buchungen_alltime=csv_buchungen_alltime)
+                    if process_type == 'getraenkeliste':
+                        save_billing_to_alltime_shop(firstName=contact["Vorname"], lastName=contact["Nachname"],
+                                                     # CB raw csv wird ergänzt
+                                                     df_cleaned_buchungen=df,
+                                                     csv_buchungen_alltime=csv_buchungen_alltime)
                     print("SAVED BILLINGS FOR PLAYER %(first_name)s %(family_name)s TO ALLTIME TABLE!" % {
                         "first_name": contact["Vorname"],
                         "family_name": contact["Nachname"]})
@@ -540,16 +555,16 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
 
 
 if __name__ == '__main__':
-    main(
-        csv_file_path='C:/Users/Megaport/Desktop/TCGrafrath/03_Datenstatus_CBvsEasyVerein/Getränkeabrechnung_November2025/',
-        filename_buchungen='getraenkeliste.csv',
-        filename_mitglieder='mitgliederliste.csv',
-        buchungen_alltime='Gesamtübersicht_getraenke.csv',
-        dryrun=True,
-        completion_date=dt.date(2025, 11, 28))  # TODO completion_date nur für Getränkeabrechnung relevant (Hinweis bei Vereinsgetränkeliste) muss Lösung gefunden werden beim zusammenführen mit Gästebuchungen
     # main(
-    #     csv_file_path='C:/Users/Megaport/Desktop/TCGrafrath/03_Datenstatus_CBvsEasyVerein/Gaesteabrechnung_November2025/',
-    #     filename_buchungen='gaesteliste.csv',
+    #     csv_file_path='C:/Users/Megaport/Desktop/TCGrafrath/03_Datenstatus_CBvsEasyVerein/Getraenkeabrechnung_Juli2026/',
+    #     filename_buchungen='getraenkeliste.csv',
     #     filename_mitglieder='mitgliederliste.csv',
-    #     buchungen_alltime='Gesamtübersicht_abgerechnet.csv',
-    #     dryrun=True)
+    #     buchungen_alltime='Gesamtübersicht_getraenke.csv',
+    #     dryrun=False,
+    #     completion_date=dt.date(2025, 11, 28))
+    main(
+        csv_file_path='C:/Users/Megaport/Desktop/TCGrafrath/03_Datenstatus_CBvsEasyVerein/Gaesteabrechnung_Juli2026/',
+        filename_buchungen='gaesteliste.csv',
+        filename_mitglieder='mitgliederliste.csv',
+        buchungen_alltime='Gesamtübersicht_abgerechnet.csv',
+        dryrun=True)
