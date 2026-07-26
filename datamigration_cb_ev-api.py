@@ -469,11 +469,10 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
         #     continue
         if contact["Gruppe"] == "Mitglied" or contact["Gruppe"] == "Gast":
             try:
-                output = "test"
-                # output = create_invoice(contact=contact,
-                #                         dryrun=dryrun,
-                #                         process_type=process_type,
-                #                         completion_date=completion_date)  # Mitglied oder Gastpieler ist in easyVerein => Erstelung der Rechnung
+                output = create_invoice(contact=contact,
+                                        dryrun=dryrun,
+                                        process_type=process_type,
+                                        completion_date=completion_date)  # Mitglied oder Gastpieler ist in easyVerein => Erstelung der Rechnung
                 if not dryrun:
                     print("created invoice in easyVerein: %(invoice)s" % {"invoice": output})
                     if process_type == 'gaesteliste':
