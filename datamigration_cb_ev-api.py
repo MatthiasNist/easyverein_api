@@ -24,6 +24,7 @@ ev_client = EasyvereinAPI(
 
 dryrun = True
 
+
 def create_guestplayer(contact,
                        contactDetailsGroup_Guest=['https://easyverein.com/api/v1.7/contact-details-group/187854580'],
                        dryrun=False):
@@ -104,7 +105,7 @@ def create_invoice_items(contact, process_type, completion_date):
         for i in range(len(data['_Preis'])):
             buchungstext = "Gastspielerposten am %(date)s, Dauer: %(duration)s" % {"date": data['Buchungszeit'][i],
                                                                                    "duration": data['Dauer'][i]}
-            invoice_item = InvoiceItem(title=buchungstext, quantity=1, unitPrice=data['_Preis'][i],
+            invoice_item = InvoiceItem(title=buchungstext, quantity=1, sphere=4, unitPrice=data['_Preis'][i],
                                        description='Informationen Gästenutzung: https://www.tc-grafrath.de/der-verein/gaeste.html',
                                        taxRate=0.00, taxName=' ')
             invoice_item.billingAccount = 'https://easyverein.com/api/v2.0/billing-account/44093'
@@ -124,7 +125,7 @@ def create_invoice_items(contact, process_type, completion_date):
                 "date": data['Datum'][i].strftime(format='%d.%m.%Y'),
                 "Anzahl": sum(data['Anzahl'][i]),
                 "Posten": ', '.join(data['Artikel'][i])}
-            invoice_item = InvoiceItem(title=buchungstext, quantity=1, unitPrice=sum(data['_Preis'][i]),
+            invoice_item = InvoiceItem(title=buchungstext, quantity=1, sphere=4, unitPrice=sum(data['_Preis'][i]),
                                        description=get_description(kaufdatum=contact["Datum"][i],
                                                                    completion_date=completion_date),
                                        taxRate=0.00, taxName=' ')
@@ -456,8 +457,8 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
     merged_all_players_df = pd.merge(merged_df, df_all_members, on=['Vorname', 'Nachname', 'plz'], how='left')
 
     for contact in merged_all_players_df.to_dict(orient='records'):
-        if not ((contact["Nachname"] == "Lechner" and contact["Vorname"] == "Christian")):  # TODO ZU DEBUGGING ZWECKEN
-            continue
+        # if not ((contact["Nachname"] == "Kiesling-Kern" and contact["Vorname"] == "Mirko")):  # TODO ZU DEBUGGING ZWECKEN
+        #     continue
         # if contact.get('Gruppe', False):
         #     if isinstance(contact['Gruppe'], str):
         #         continue
@@ -559,11 +560,11 @@ if __name__ == '__main__':
     #     filename_buchungen='getraenkeliste.csv',
     #     filename_mitglieder='mitgliederliste.csv',
     #     buchungen_alltime='Gesamtübersicht_getraenke.csv',
-    #     dryrun=False,
+    #     dryrun=True,
     #     completion_date=dt.date(2025, 11, 28))
     main(
         csv_file_path='C:/Users/Megaport/Desktop/TCGrafrath/03_Datenstatus_CBvsEasyVerein/Gaesteabrechnung_Juli2026/',
         filename_buchungen='gaesteliste.csv',
         filename_mitglieder='mitgliederliste.csv',
         buchungen_alltime='Gesamtübersicht_abgerechnet.csv',
-        dryrun=True)
+        dryrun=False)
