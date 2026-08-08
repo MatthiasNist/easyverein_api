@@ -524,6 +524,7 @@ def main(csv_file_path, filename_buchungen, filename_mitglieder, buchungen_allti
                 if not dryrun:
                     output_invoice = create_invoice(contact=contact,
                                                     dryrun=dryrun,
+                                                    process_type=process_type,
                                                     completion_date=completion_date)
                     print("created invoice in easyVerein: %(invoice)s" % {"invoice": output_invoice})
                     if process_type == 'gaesteliste':
